@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # Copyright Daniel Roesler, under MIT license, see LICENSE at github.com/diafygi/acme-tiny
 import argparse, subprocess, json, os, sys, base64, binascii, time, hashlib, re, copy, textwrap, logging
 try:
@@ -77,8 +77,7 @@ def get_crt(account_key, csr, acme_dir, log=LOGGER, CA=DEFAULT_CA, disable_check
     pub_hex, pub_exp = re.search(pub_pattern, out.decode('utf8'), re.MULTILINE|re.DOTALL).groups()
     pub_exp = "{0:x}".format(int(pub_exp))
     pub_exp = "0{0}".format(pub_exp) if len(pub_exp) % 2 else pub_exp
-    alg = "RS256"
-    jwk = {
+    alg, jwk = "RS256", {
         "e": _b64(binascii.unhexlify(pub_exp.encode("utf-8"))),
         "kty": "RSA",
         "n": _b64(binascii.unhexlify(re.sub(r"(\s|:)", "", pub_hex).encode("utf-8"))),
@@ -108,9 +107,9 @@ def get_crt(account_key, csr, acme_dir, log=LOGGER, CA=DEFAULT_CA, disable_check
 
     # create account, update contact details (if any), and set the global key identifier
     log.info("Registering account...")
-    reg_payload = {"termsOfServiceAgreed": True}
+    reg_payload = {"termsOfServiceAgreed": True} if contact is None else {"termsOfServiceAgreed": True, "contact": contact}
     account, code, acct_headers = _send_signed_request(directory['newAccount'], reg_payload, "Error registering")
-    log.info("Registered!" if code == 201 else "Already registered!")
+    log.info("{0} Account ID: {1}".format("Registered!" if code == 201 else "Already registered!", acct_headers['Location']))
     if contact is not None:
         account, _, _ = _send_signed_request(acct_headers['Location'], {"contact": contact}, "Error updating contact details")
         log.info("Updated contact details:\n{0}".format("\n".join(account['contact'])))
@@ -125,6 +124,11 @@ def get_crt(account_key, csr, acme_dir, log=LOGGER, CA=DEFAULT_CA, disable_check
     for auth_url in order['authorizations']:
         authorization, _, _ = _send_signed_request(auth_url, None, "Error getting challenges")
         domain = authorization['identifier']['value']
+
+        # skip if already valid
+        if authorization['status'] == "valid":
+            log.info("Already verified: {0}, skipping...".format(domain))
+            continue
         log.info("Verifying {0}...".format(domain))
 
         # find the http-01 challenge and write the challenge file
@@ -169,15 +173,11 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=textwrap.dedent("""\
-            This script automates the process of getting a signed TLS certificate from Let's Encrypt using
-            the ACME protocol. It will need to be run on your server and have access to your private
-            account key, so PLEASE READ THROUGH IT! It's only ~200 lines, so it won't take long.
+            This script automates the process of getting a signed TLS certificate from Let's Encrypt using the ACME protocol.
+            It will need to be run on your server and have access to your private account key, so PLEASE READ THROUGH IT!
+            It's only ~200 lines, so it won't take long.
 
-            Example Usage:
-            python acme_tiny.py --account-key ./account.key --csr ./domain.csr --acme-dir /usr/share/nginx/html/.well-known/acme-challenge/ > signed_chain.crt
-
-            Example Crontab Renewal (once per month):
-            0 0 1 * * python /path/to/acme_tiny.py --account-key /path/to/account.key --csr /path/to/domain.csr --acme-dir /usr/share/nginx/html/.well-known/acme-challenge/ > /path/to/signed_chain.crt 2>> /var/log/acme_tiny.log
+            Example Usage: python acme_tiny.py --account-key ./account.key --csr ./domain.csr --acme-dir /usr/share/nginx/html/.well-known/acme-challenge/ > signed_chain.crt
             """)
     )
     parser.add_argument("--account-key", required=True, help="path to your Let's Encrypt account private key")
